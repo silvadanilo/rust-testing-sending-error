@@ -8,35 +8,37 @@ use futures::future::{Future};
 use futures::{Sink, Stream};
 use futures::sync::mpsc::{self, UnboundedSender};
 use tokio_timer::*;
-use std::{io, str};
-use tokio_core::io::{Codec, EasyBuf,Io};
+use tokio_core::io::{Io};
 use tokio_core::net::{TcpStream};
 use tokio_core::reactor::{Core, Handle};
 use std::time::Duration;
+use std::{io, str};
 
 fn main() {
     let mut core = Core::new().unwrap();
     let handle = core.handle();
 
     let (tx, rx) = mpsc::unbounded();
-    simulated_messaging_receiving_from_clients(tx, &handle);
+    simulating_messaging_receiving_from_clients(tx, &handle);
 
     let remote_addr = "127.0.0.1:9876".parse().unwrap();
     let tcp = TcpStream::connect(&remote_addr, &handle);
 
     let client = tcp.and_then(move |stream| {
-        let (sender, _receiver) = stream.framed(LineCodec).split();
+        let (receiver, sender) = stream.split();
 
         let writer = rx
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "..."))
             .fold(sender, |sender, msg| {
                 println!("before sending `{}`", msg);
-                sender.send(msg)
-                    .map(|sender| {
+                let msg = format!("{}\n", msg);
+                tokio_core::io::write_all(sender, msg.into_bytes())
+                    .map(|(sender, _)| {
                         println!("sent");
                         sender
                     })
-            });
+            })
+        ;
 
         writer
     });
@@ -44,7 +46,7 @@ fn main() {
     core.run(client).unwrap();
 }
 
-fn simulated_messaging_receiving_from_clients(buftx: UnboundedSender<String>,
+fn simulating_messaging_receiving_from_clients(buftx: UnboundedSender<String>,
                                               handle: &Handle)
                                               -> () {
 
@@ -55,7 +57,7 @@ fn simulated_messaging_receiving_from_clients(buftx: UnboundedSender<String>,
         println!("Interval");
         i = i + 1;
         let f = buftx.clone()
-            .send(format!("Messagio {}", i).to_string())
+            .send(format!("Message -> {}", i).to_string())
             .map(|_| ())
             .map_err(|_| TimerError::NoCapacity);
 
@@ -63,39 +65,4 @@ fn simulated_messaging_receiving_from_clients(buftx: UnboundedSender<String>,
     });
 
     handle.spawn(background_tasks.map(|_| ()).map_err(|_| ()));
-}
-
-
-
-struct LineCodec;
-impl Codec for LineCodec {
-    type In = String;
-    type Out = String;
-
-    fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
-        // If our buffer contains a newline...
-        if let Some(n) = buf.as_ref().iter().position(|b| *b == b'\n') {
-            // remove this line and the newline from the buffer.
-            let line = buf.drain_to(n);
-            buf.drain_to(1); // Also remove the '\n'.
-
-            // Turn this data into a UTF-8 string and return it
-            return match str::from_utf8(line.as_ref()) {
-                Ok(s) => Ok(Some(s.to_string())),
-                Err(_) => Err(io::Error::new(io::ErrorKind::Other, "invalid string")),
-            }
-        }
-
-        // Otherwise, we don't have enough data for a full message yet
-        Ok(None)
-    }
-
-    fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
-        for byte in msg.as_bytes() {
-            buf.push(*byte);
-        }
-
-        buf.push(b'\n');
-        Ok(())
-    }
 }
