@@ -36,13 +36,6 @@ fn main() {
                         println!("sent");
                         sender
                     })
-                    .map_err(|_| io::Error::new(io::ErrorKind::Other, "..."))
-            })
-            .map(|_| {
-                ()
-            })
-            .map_err(|_| {
-                io::Error::new(io::ErrorKind::Other, "...")
             });
 
         writer
